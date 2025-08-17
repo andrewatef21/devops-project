@@ -2,37 +2,46 @@ pipeline {
   agent any
 
   environment {
-    IMAGE_REPO = "docker.io/andrewatef/java-hello"
+    DOCKER_USER = credentials('docker-username-id') // optional if you use withCredentials below
   }
 
   stages {
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Build & Push Docker image') {
       steps {
-        withCredentials([usernamePassword(
-          credentialsId: 'docker-hub',
-          usernameVariable: 'DOCKER_USER',
-          passwordVariable: 'DOCKER_PASS'
-        )]) {
-          sh '''
-            set -euxo pipefail
-            TAG="${BUILD_NUMBER}"
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh '''#!/usr/bin/env bash
+set -euo pipefail
 
-            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-            docker build -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" .
-            docker push "${IMAGE_REPO}:${TAG}"
-            docker push "${IMAGE_REPO}:latest"
-            docker logout || true
-          '''
+echo "Docker version:"
+docker --version
+
+echo "Logging in to Docker registry…"
+echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+
+IMAGE="andrewatef/devops-project:${BUILD_NUMBER}"
+
+echo "Building image $IMAGE"
+docker build -t "$IMAGE" .
+
+echo "Pushing image $IMAGE"
+docker push "$IMAGE"
+'''
+        }
+      }
+      post {
+        always {
+          sh '''#!/usr/bin/env bash
+set -euo pipefail
+docker system prune -f || true
+'''
         }
       }
     }
-  }
-
-  post {
-    always { sh 'docker system prune -f || true' }
   }
 }
