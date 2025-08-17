@@ -1,6 +1,6 @@
 pipeline {
   agent any
-  options { skipDefaultCheckout() }  // avoid double checkout
+  options { skipDefaultCheckout() } // cleaner logs
   stages {
     stage('Checkout') {
       steps { checkout scm }
@@ -11,9 +11,10 @@ pipeline {
           sh '''#!/usr/bin/env bash
 set -euo pipefail
 
-docker --version || true
+echo "Docker version:"
+docker --version
 
-echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+printf "%s" "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
 
 IMAGE="docker.io/${DOCKER_USER}/devops-project:${BUILD_NUMBER}"
 echo "Building $IMAGE"
