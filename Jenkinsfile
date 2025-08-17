@@ -4,14 +4,20 @@ pipeline {
   environment {
     IMAGE_REPO = "docker.io/andrewatef/devops-project"
     APP_NAME   = "devops-app"
-    APP_PORT   = "8080"  // host port to expose
+    APP_PORT   = "8080"                 // host port
+    HEALTH_URL = "http://localhost:8080/"
+    // Change to your actual creds ID if different:
+    DOCKER_CREDS_ID = "dockerhub-creds"
+    STATE_FILE = "/var/jenkins_home/last_deployed_image.txt"
   }
+
   stages {
     stage('Checkout') { steps { checkout scm } }
+
     stage('Build & Push Docker image') {
       steps {
         withCredentials([usernamePassword(
-          credentialsId: 'dockerhub-creds',     // if your ID is 'docker-hub', change here
+          credentialsId: "${DOCKER_CREDS_ID}",
           usernameVariable: 'DOCKER_USER',
           passwordVariable: 'DOCKER_PASS'
         )]) {
@@ -29,29 +35,92 @@ docker build -t "$BUILD_TAG" .
 echo "Tag latest -> $LATEST_TAG"
 docker tag "$BUILD_TAG" "$LATEST_TAG"
 
-echo "Push $BUILD_TAG and $LATEST_TAG"
+echo "Pushing $BUILD_TAG and $LATEST_TAG"
 docker push "$BUILD_TAG"
 docker push "$LATEST_TAG"
 '''
         }
       }
     }
-    stage('Deploy to EC2') {
+
+    stage('Capture previous image (for rollback)') {
       steps {
         sh '''#!/usr/bin/env bash
 set -euo pipefail
-IMAGE="${IMAGE_REPO}:${BUILD_NUMBER}"
+# Save currently running image (if any) to STATE_FILE
+if docker inspect "${APP_NAME}" >/dev/null 2>&1; then
+  CURR_IMG=$(docker inspect -f '{{.Config.Image}}' "${APP_NAME}")
+  echo "$CURR_IMG" | tee "${STATE_FILE}"
+  echo "Saved previous image: $CURR_IMG"
+else
+  echo "none" | tee "${STATE_FILE}"
+  echo "No previous container/image found."
+fi
+'''
+      }
+    }
 
-# Stop old container if any
+    stage('Deploy new container') {
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+NEW_IMG="${IMAGE_REPO}:${BUILD_NUMBER}"
+
+# Stop/remove any existing container
 docker rm -f "${APP_NAME}" 2>/dev/null || true
 
-# Run new container: host 8080 -> container 80 (Nginx)
-docker run -d --name "${APP_NAME}" --restart=always -p ${APP_PORT}:80 "${IMAGE}"
+# Run new container (expects port 80 inside; adjust if your app differs)
+docker run -d --name "${APP_NAME}" --restart=always -p ${APP_PORT}:80 "${NEW_IMG}"
 
 docker ps --filter "name=${APP_NAME}"
 '''
       }
     }
+
+    stage('Smoke test') {
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+echo "Waiting for app to become healthy at ${HEALTH_URL} ..."
+for i in {1..30}; do
+  if curl -fsS --max-time 2 "${HEALTH_URL}" >/dev/null; then
+    echo "Smoke test passed."
+    exit 0
+  fi
+  sleep 2
+done
+echo "Smoke test FAILED after 60s."
+exit 1
+'''
+      }
+    }
   }
-  post { always { sh 'docker system prune -f || true' } }
+
+  post {
+    failure {
+      // Auto-rollback if we had a previous image
+      sh '''#!/usr/bin/env bash
+set -euo pipefail
+if [ -f "${STATE_FILE}" ]; then
+  PREV_IMG=$(cat "${STATE_FILE}")
+  if [ "$PREV_IMG" != "none" ]; then
+    echo "Rolling back to $PREV_IMG ..."
+    docker rm -f "${APP_NAME}" 2>/dev/null || true
+    docker run -d --name "${APP_NAME}" --restart=always -p ${APP_PORT}:80 "$PREV_IMG"
+    docker ps --filter "name=${APP_NAME}"
+  else
+    echo "No previous image to roll back to."
+  fi
+else
+  echo "No state file found; cannot rollback."
+fi
+'''
+    }
+    always {
+      sh '''#!/usr/bin/env bash
+set -euo pipefail
+docker system prune -f || true
+'''
+    }
+  }
 }
