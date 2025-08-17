@@ -1,35 +1,25 @@
 pipeline {
   agent any
-
-  environment {
-    DOCKER_USER = credentials('docker-username-id') // optional if you use withCredentials below
-  }
-
+  options { skipDefaultCheckout() }  // avoid double checkout
   stages {
     stage('Checkout') {
-      steps {
-        checkout scm
-      }
+      steps { checkout scm }
     }
-
     stage('Build & Push Docker image') {
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           sh '''#!/usr/bin/env bash
 set -euo pipefail
 
-echo "Docker version:"
-docker --version
+docker --version || true
 
-echo "Logging in to Docker registry…"
 echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
 
-IMAGE="andrewatef/devops-project:${BUILD_NUMBER}"
-
-echo "Building image $IMAGE"
+IMAGE="docker.io/${DOCKER_USER}/devops-project:${BUILD_NUMBER}"
+echo "Building $IMAGE"
 docker build -t "$IMAGE" .
 
-echo "Pushing image $IMAGE"
+echo "Pushing $IMAGE"
 docker push "$IMAGE"
 '''
         }
