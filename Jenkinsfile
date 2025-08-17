@@ -1,38 +1,45 @@
 pipeline {
   agent any
-  options { skipDefaultCheckout() } // cleaner logs
+  options { skipDefaultCheckout() }
+  environment {
+    IMAGE_REPO = "docker.io/andrewatef/devops-project"
+    APP_NAME   = "devops-app"
+    APP_PORT   = "8080"   // host port
+  }
   stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
+    stage('Checkout') { steps { checkout scm } }
     stage('Build & Push Docker image') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'docker-hub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
           sh '''#!/usr/bin/env bash
 set -euo pipefail
-
-echo "Docker version:"
-docker --version
-
+rm -rf ~/.docker || true
 printf "%s" "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-
-IMAGE="docker.io/${DOCKER_USER}/devops-project:${BUILD_NUMBER}"
-echo "Building $IMAGE"
-docker build -t "$IMAGE" .
-
-echo "Pushing $IMAGE"
-docker push "$IMAGE"
-'''
-        }
-      }
-      post {
-        always {
-          sh '''#!/usr/bin/env bash
-set -euo pipefail
-docker system prune -f || true
+BUILD_TAG="${IMAGE_REPO}:${BUILD_NUMBER}"
+LATEST_TAG="${IMAGE_REPO}:latest"
+docker build -t "$BUILD_TAG" .
+docker tag "$BUILD_TAG" "$LATEST_TAG"
+docker push "$BUILD_TAG"
+docker push "$LATEST_TAG"
 '''
         }
       }
     }
+    stage('Deploy to EC2 (this host)') {
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+IMAGE="${IMAGE_REPO}:${BUILD_NUMBER}"
+# Stop old container if exists
+docker rm -f "${APP_NAME}" 2>/dev/null || true
+# Run new container (Nginx listens on 80 inside the container)
+docker run -d --name "${APP_NAME}" --restart=always -p ${APP_PORT}:80 "${IMAGE}"
+docker ps --filter "name=${APP_NAME}"
+'''
+      }
+    }
+  }
+  post {
+    always { sh 'docker system prune -f || true' }
   }
 }
