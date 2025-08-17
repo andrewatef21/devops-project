@@ -1,46 +1,48 @@
 pipeline {
   agent any
   environment {
-    DOCKER_USER = credentials('DOCKER_USER_TEXT')     // We'll map as text env in global props
-    DOCKER_PASS = credentials('DOCKER_PASS_TEXT')     // or plain env; see steps below
-    IMAGE_REPO  = "docker.io/${DOCKER_USER}/java-hello"
+    IMAGE_REPO = "docker.io/andrewatef/java-hello"
   }
   stages {
     stage('Checkout') {
       steps { checkout scm }
     }
-    stage('Build & Push Image') {
+
+    stage('Build JAR with Maven (in Docker)') {
       steps {
-        script {
-          def tag = sh(returnStdout: true, script: "git rev-parse --short HEAD").trim()
-          sh """
-            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-            docker build -t ${IMAGE_REPO}:${tag} -t ${IMAGE_REPO}:latest .
-            docker push  ${IMAGE_REPO}:${tag}
-            docker push  ${IMAGE_REPO}:latest
-            echo ${tag} > _new_tag.txt
-          """
-        }
+        sh '''
+          docker run --rm -v "$PWD":/app -w /app \
+            maven:3.9.6-eclipse-temurin-17 \
+            mvn -B -DskipTests package
+        '''
       }
     }
-    stage('Bump Kustomize Tag & Push') {
+
+    stage('Build Docker image') {
       steps {
-        script {
-          def newTag = readFile("_new_tag.txt").trim()
-          sh """
-            sed -i "s/newTag: .*/newTag: ${newTag}/" k8s/base/kustomization.yaml
-            git config user.email "ci@example.com"
-            git config user.name "ci-bot"
-            git add k8s/base/kustomization.yaml
-            git commit -m "CI: bump image tag to ${newTag}" || echo "No changes"
-            git push origin HEAD:main
-          """
+        sh '''
+          TAG="${BUILD_NUMBER}"
+          docker build -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" .
+        '''
+      }
+    }
+
+    stage('Push to Docker Hub') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'docker-hub',
+                      usernameVariable: 'DOCKER_USER',
+                      passwordVariable: 'DOCKER_PASS')]) {
+          sh '''
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+            docker push "${IMAGE_REPO}:${BUILD_NUMBER}"
+            docker push "${IMAGE_REPO}:latest"
+            docker logout || true
+          '''
         }
       }
     }
   }
   post {
-    success { echo "Build OK. ArgoCD will auto-sync." }
-    failure { echo "Build failed." }
+    always { archiveArtifacts artifacts: 'target/*.jar', onlyIfSuccessful: false }
   }
 }
