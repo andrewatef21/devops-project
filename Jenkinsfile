@@ -2,16 +2,12 @@ pipeline {
   agent any
 
   environment {
-    IMAGE_REPO = "docker.io/andrewatef/java-hello"   // << change if you want
+    IMAGE_REPO = "docker.io/andrewatef/java-hello"
   }
-
-  options { timestamps() }
 
   stages {
     stage('Checkout') {
-      steps {
-        checkout scm
-      }
+      steps { checkout scm }
     }
 
     stage('Build & Push Docker image') {
@@ -23,18 +19,12 @@ pipeline {
         )]) {
           sh '''
             set -euxo pipefail
-
-            # tag with build number and latest
             TAG="${BUILD_NUMBER}"
 
             echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-
-            # build the image using your Dockerfile at repo root
             docker build -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" .
-
             docker push "${IMAGE_REPO}:${TAG}"
             docker push "${IMAGE_REPO}:latest"
-
             docker logout || true
           '''
         }
@@ -43,8 +33,6 @@ pipeline {
   }
 
   post {
-    always {
-      sh 'docker system prune -f || true'
-    }
+    always { sh 'docker system prune -f || true' }
   }
 }
