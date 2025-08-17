@@ -4,13 +4,17 @@ pipeline {
   environment {
     IMAGE_REPO = "docker.io/andrewatef/devops-project"
     APP_NAME   = "devops-app"
-    APP_PORT   = "8080"   // host port
+    APP_PORT   = "8080"  // host port
   }
   stages {
     stage('Checkout') { steps { checkout scm } }
     stage('Build & Push Docker image') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-creds',   // or 'docker-hub' if that’s your ID
+          usernameVariable: 'DOCKER_USER',
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
           sh '''#!/usr/bin/env bash
 set -euo pipefail
 rm -rf ~/.docker || true
@@ -25,21 +29,17 @@ docker push "$LATEST_TAG"
         }
       }
     }
-    stage('Deploy to EC2 (this host)') {
+    stage('Deploy to EC2') {
       steps {
         sh '''#!/usr/bin/env bash
 set -euo pipefail
 IMAGE="${IMAGE_REPO}:${BUILD_NUMBER}"
-# Stop old container if exists
 docker rm -f "${APP_NAME}" 2>/dev/null || true
-# Run new container (Nginx listens on 80 inside the container)
-docker run -d --name "${APP_NAME}" --restart=always -p ${APP_PORT}:80 "${IMAGE}"
+docker run -d --name "${APP_NAME}" --restart=always -p ${APP_PORT}:80 "${IMAGE}" || docker run -d --name "${APP_NAME}" --restart=always "${IMAGE}"
 docker ps --filter "name=${APP_NAME}"
 '''
       }
     }
   }
-  post {
-    always { sh 'docker system prune -f || true' }
-  }
+  post { always { sh 'docker system prune -f || true' } }
 }
